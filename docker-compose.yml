@@ -1,0 +1,59 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: threads_affiliate_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-affiliate}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-affiliate_secret}
+      POSTGRES_DB: ${POSTGRES_DB:-threads_affiliate}
+      TZ: ${TZ:-Asia/Jakarta}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - pg_affiliate_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-affiliate} -d ${POSTGRES_DB:-threads_affiliate}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: threads_affiliate_backend
+    restart: unless-stopped
+    shm_size: "1gb"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-affiliate}:${POSTGRES_PASSWORD:-affiliate_secret}@postgres:5432/${POSTGRES_DB:-threads_affiliate}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000,http://127.0.0.1:3000}
+      AUTH_STATE_PATH: /app/data/auth_threads.json
+      SEED_PRODUCTS_PATH: /app/data/seed_products.json
+      TZ: ${TZ:-Asia/Jakarta}
+    ports:
+      - "${BACKEND_PORT:-8000}:8000"
+    volumes:
+      - ./backend/data:/app/data
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000}
+    container_name: threads_affiliate_frontend
+    restart: unless-stopped
+    depends_on:
+      - backend
+    environment:
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000}
+      TZ: ${TZ:-Asia/Jakarta}
+    ports:
+      - "${FRONTEND_PORT:-3000}:3000"
+
+volumes:
+  pg_affiliate_data:

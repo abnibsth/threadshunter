@@ -1,0 +1,74 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" fill="none">
+  <rect width="512" height="512" rx="112" fill="#0B0B0C" />
+
+  <!-- Outer concentric Threads-style C-spiral -->
+  <path
+    d="M324 388 C264 426 178 416 132 362 C82 304 86 206 142 152 C196 100 288 98 340 146 C364 168 364 202 338 224 L294 264"
+    stroke="#FF6B00"
+    stroke-width="26"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+  />
+
+  <!-- Middle concentric arc (top-left & bottom) -->
+  <path
+    d="M150 264 C150 202 198 156 260 156 C284 156 306 164 322 178"
+    stroke="#FF6B00"
+    stroke-width="26"
+    stroke-linecap="round"
+  />
+  <path
+    d="M162 326 C192 362 248 372 296 352 C314 344 334 346 346 360"
+    stroke="#FF6B00"
+    stroke-width="26"
+    stroke-linecap="round"
+  />
+
+  <!-- Diagonal sweep curving over center eye -->
+  <path
+    d="M126 322 L208 240 C234 214 274 214 294 242"
+    stroke="#FF6B00"
+    stroke-width="26"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+  />
+
+  <!-- Lower eye curve under sparkle -->
+  <path
+    d="M198 286 C214 316 254 324 284 300 L318 268"
+    stroke="#FF6B00"
+    stroke-width="26"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+  />
+
+  <!-- Right side U-loop connecting to arrow shaft -->
+  <path
+    d="M342 258 L338 302 C336 334 368 346 386 318 C398 298 398 258 380 226"
+    stroke="#FF6B00"
+    stroke-width="26"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+  />
+
+  <!-- Diagonal Growth Arrow pointing top-right -->
+  <path
+    d="M348 214 L414 148"
+    stroke="#FF6B00"
+    stroke-width="26"
+    stroke-linecap="round"
+  />
+  <path
+    d="M352 148 L414 148 L414 210"
+    stroke="#FF6B00"
+    stroke-width="26"
+    stroke-linecap="square"
+    stroke-linejoin="miter"
+  />
+
+  <!-- Center 4-point AI Sparkle Star -->
+  <path
+    d="M248 242 C250 256 258 264 272 266 C258 268 250 276 248 290 C246 276 238 268 224 266 C238 264 246 256 248 242 Z"
+    fill="#FF6B00"
+  />
+</svg>
