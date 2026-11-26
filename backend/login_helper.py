@@ -1,23 +1,15 @@
 """
-Local Threads Session Login Helper (Windows / macOS / Linux).
+Local Threads Session Helper (Windows / macOS / Linux).
 
-Supports 3 ways to capture `backend/data/auth_threads.json`:
-  1. Default (Google Chrome asli + profil khusus bot):
-       python login_helper.py
-     Opens your installed Google Chrome (falls back to Chromium) using a persistent
-     profile in `backend/data/chrome_profile` so you only need to log in once.
+Pilihan 1 (REKOMENDASI — Tanpa Buka Browser Baru!):
+  Pakai sesi Threads yang SUDAH LOGIN di Google Chrome harianmu:
+  1. Buka https://www.threads.com di Chrome lama kamu.
+  2. Pasang ekstensi gratis "Cookie-Editor" dari Chrome Web Store.
+  3. Klik Cookie-Editor -> klik "Export" -> pilih "Export as JSON" (otomatis ter-copy ke Clipboard!).
+  4. Jalankan `python login_helper.py` -> tekan ENTER (Pilih 1) -> langsung jadi `auth_threads.json`!
 
-  2. Use your existing Windows Google Chrome profile directly:
-       python login_helper.py --use-my-chrome
-     Lists your existing Chrome profiles (e.g. Andre Basit / Profile 1 / Default)
-     so you can reuse an already-logged-in Threads session.
-     (Close all Chrome windows first; note Chrome 136+ may restrict debugging the
-      default User Data directory — if so, use Mode 3 below!)
-
-  3. Import cookies directly from your already-open Chrome (Cookie-Editor JSON):
-       python login_helper.py --import-cookies path/to/cookies.json
-     Converts a Chrome Cookie-Editor JSON export from threads.com into Playwright's
-     `backend/data/auth_threads.json` without logging in again.
+Pilihan 2:
+  Buka jendela Chrome khusus bot jika ingin login manual terpisah.
 """
 
 from __future__ import annotations
@@ -25,12 +17,10 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
-import os
+import subprocess
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
-
-from playwright.async_api import async_playwright
+from typing import Any, Dict, List, Tuple
 
 BACKEND_DIR = Path(__file__).resolve().parent
 OUTPUT_PATH = BACKEND_DIR / "data" / "auth_threads.json"
@@ -61,12 +51,13 @@ def _normalize_same_site(value: Any) -> str:
     return "Lax"
 
 
-def _import_cookie_file(source_path: Path) -> None:
-    if not source_path.exists():
-        print(f"[ERROR] File tidak ditemukan: {source_path}")
-        sys.exit(1)
+def _save_from_json_string(raw_text: str) -> bool:
+    try:
+        parsed = json.loads(raw_text)
+    except Exception as exc:
+        print(f"\n[!] Isi Clipboard belum berupa JSON valid ({exc}).")
+        return False
 
-    parsed = json.loads(source_path.read_text(encoding="utf-8"))
     if isinstance(parsed, list):
         raw_cookies = [c for c in parsed if isinstance(c, dict)]
         origins: List[Any] = []
@@ -74,8 +65,8 @@ def _import_cookie_file(source_path: Path) -> None:
         raw_cookies = [c for c in parsed["cookies"] if isinstance(c, dict)]
         origins = parsed.get("origins", [])
     else:
-        print("[ERROR] Format JSON tidak dikenali. Gunakan Export JSON dari Cookie-Editor.")
-        sys.exit(1)
+        print("\n[!] Format JSON tidak dikenali. Pastikan klik Export -> Export as JSON di Cookie-Editor.")
+        return False
 
     normalized: List[Dict[str, Any]] = []
     for raw in raw_cookies:
@@ -105,207 +96,155 @@ def _import_cookie_file(source_path: Path) -> None:
 
     threads_cookies, has_auth = _analyze_cookies(normalized)
     if not threads_cookies:
-        print("[ERROR] Tidak ada cookie domain threads.com / threads.net di file ini.")
-        sys.exit(1)
+        print(
+            "\n[!] Tidak ditemukan cookie threads.com / threads.net di Clipboard!\n"
+            "    Pastikan kamu klik Cookie-Editor saat sedang berada di tab https://www.threads.com."
+        )
+        return False
 
     OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
     OUTPUT_PATH.write_text(
         json.dumps({"cookies": normalized, "origins": origins}, indent=2),
         encoding="utf-8",
     )
-    print(f"[OK] Berhasil import & konversi ke: {OUTPUT_PATH}")
-    print(f"     Total cookies              : {len(normalized)}")
-    print(f"     Threads domain cookies     : {len(threads_cookies)}")
-    print(f"     Login session terverifikasi: {'YA' if has_auth else 'BELUM'}")
+    print(f"\n[SUKSES] Sesi Chrome lama kamu berhasil disalin ke: {OUTPUT_PATH}")
+    print(f"         Total cookies              : {len(normalized)}")
+    print(f"         Threads domain cookies     : {len(threads_cookies)}")
+    print(f"         Login session terverifikasi: {'YA (Siap dipakai!)' if has_auth else 'BELUM LOGIN'}")
+    return True
 
 
-def _discover_windows_chrome_profiles() -> Tuple[Optional[Path], List[Tuple[str, str]]]:
-    local_app_data = os.environ.get("LOCALAPPDATA")
-    if not local_app_data:
-        return None, []
-    user_data_dir = Path(local_app_data) / "Google" / "Chrome" / "User Data"
-    if not user_data_dir.exists():
-        return None, []
+def _read_clipboard_text() -> str:
+    # 1. Try tkinter (built into standard Python on Windows)
+    try:
+        import tkinter as tk
 
-    profiles: List[Tuple[str, str]] = []
-    local_state_file = user_data_dir / "Local State"
-    if local_state_file.exists():
-        try:
-            state = json.loads(local_state_file.read_text(encoding="utf-8"))
-            info_cache = state.get("profile", {}).get("info_cache", {})
-            for folder_name, meta in info_cache.items():
-                display_name = meta.get("name") or folder_name
-                email = meta.get("user_name") or ""
-                label = f"{display_name} ({email})" if email else display_name
-                profiles.append((folder_name, label))
-        except Exception:
-            pass
+        root = tk.Tk()
+        root.withdraw()
+        text = root.clipboard_get()
+        root.destroy()
+        if text and text.strip():
+            return text.strip()
+    except Exception:
+        pass
 
-    if not profiles:
-        for child in sorted(user_data_dir.iterdir()):
-            if child.is_dir() and (
-                child.name == "Default" or child.name.startswith("Profile ")
-            ):
-                profiles.append((child.name, child.name))
+    # 2. Fallback to PowerShell Get-Clipboard on Windows
+    try:
+        res = subprocess.run(
+            ["powershell", "-NoProfile", "-Command", "Get-Clipboard -Raw"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if res.returncode == 0 and res.stdout.strip():
+            return res.stdout.strip()
+    except Exception:
+        pass
 
-    return user_data_dir, profiles
+    return ""
 
 
-async def _run_interactive_login(use_my_chrome: bool, profile_arg: Optional[str]) -> None:
+def _run_clipboard_flow() -> None:
+    print("\n" + "=" * 72)
+    print(" MODE 1 — Pakai Sesi dari Chrome Lama Kamu (TANPA Buka Browser Baru)")
+    print("=" * 72)
+    print(" 1. Di Chrome hijau kamu yang biasa, buka tab: https://www.threads.com")
+    print("    (Pastikan akun Threads kamu sudah dalam keadaan login di situ).")
+    print(" 2. Pasang ekstensi Chrome gratis 'Cookie-Editor':")
+    print("    https://chromewebstore.google.com/detail/cookie-editor/hlkenndednhfkekhgcdicdfddnkalmdm")
+    print(" 3. Klik ikon Cookie-Editor di pojok kanan atas Chrome -> klik 'Export' -> 'JSON'.")
+    print("    (Data sesi otomatis masuk ke Clipboard Windows kamu!)")
+    print("=" * 72)
+
+    while True:
+        cmd = input(
+            "\n>>> Sudah klik Export -> JSON di Chrome lama kamu? Tekan ENTER untuk ambil otomatis (atau ketik 'batal'): "
+        ).strip().lower()
+        if cmd in {"batal", "cancel", "q", "exit"}:
+            print("Dibatalkan.")
+            return
+
+        clip = _read_clipboard_text()
+        if not clip:
+            print("[!] Clipboard kosong. Copy dulu dari Cookie-Editor -> Export -> JSON.")
+            continue
+
+        if _save_from_json_string(clip):
+            return
+
+
+async def _run_separate_browser_login() -> None:
+    from playwright.async_api import async_playwright
+
     OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
-
-    user_data_dir = PERSISTENT_PROFILE_DIR
-    extra_args = [
-        "--disable-blink-features=AutomationControlled",
-        "--start-maximized",
-    ]
-
-    if use_my_chrome:
-        chrome_dir, profiles = _discover_windows_chrome_profiles()
-        if chrome_dir is None:
-            print("[ERROR] Folder profil Google Chrome Windows tidak ditemukan.")
-            sys.exit(1)
-
-        chosen_profile = profile_arg
-        if not chosen_profile:
-            print("\nProfil Google Chrome yang terdeteksi di PC kamu:")
-            for idx, (folder, label) in enumerate(profiles, start=1):
-                print(f"  {idx}. {label}  [{folder}]")
-            raw_choice = input("\nPilih nomor profil (misal 1): ").strip()
-            try:
-                chosen_profile = profiles[int(raw_choice) - 1][0]
-            except Exception:
-                print("[ERROR] Pilihan tidak valid.")
-                sys.exit(1)
-
-        user_data_dir = chrome_dir
-        extra_args.append(f"--profile-directory={chosen_profile}")
-        print("\n[PENTING] Tutup SEMUA jendela Google Chrome yang sedang terbuka terlebih dahulu!")
-        input(">>> Sudah tutup semua jendela Chrome? Tekan ENTER untuk lanjut... ")
-    else:
-        PERSISTENT_PROFILE_DIR.mkdir(parents=True, exist_ok=True)
-
-    print("=" * 72)
-    print(" Threads Affiliate AI Hunter — Google Chrome Login Helper")
-    print("=" * 72)
-    print(f" Mode       : {'Profil Chrome Kamu' if use_my_chrome else 'Google Chrome (Profil Khusus Bot)'}")
-    print(f" User Data  : {user_data_dir}")
-    print(" 1. Jendela Google Chrome akan terbuka ke https://www.threads.com/login.")
-    print(" 2. Jika belum login, login dulu (atau langsung masuk kalau sudah login).")
-    print(" 3. Setelah feed Threads tampil penuh, kembali ke sini, ketik 'ok' + ENTER.")
-    print("=" * 72)
+    PERSISTENT_PROFILE_DIR.mkdir(parents=True, exist_ok=True)
 
     async with async_playwright() as p:
         launch_kwargs: Dict[str, Any] = {
-            "user_data_dir": str(user_data_dir),
+            "user_data_dir": str(PERSISTENT_PROFILE_DIR),
             "headless": False,
             "locale": "id-ID",
             "timezone_id": "Asia/Jakarta",
             "viewport": {"width": 1366, "height": 900},
-            "args": extra_args,
+            "args": ["--start-maximized"],
         }
-
         try:
-            # Prefer real installed Google Chrome instead of bare Playwright Chromium
             context = await p.chromium.launch_persistent_context(
                 channel="chrome", **launch_kwargs
             )
-        except Exception as chrome_exc:
-            if use_my_chrome:
-                print(f"\n[!] Google Chrome menolak akses ke profil default: {chrome_exc}")
-                print(
-                    "\nTips (Chrome versi 136+ memblokir remote debugging di folder User Data default):\n"
-                    "  CARA TERCEPAT tanpa login ulang:\n"
-                    "  1. Buka https://www.threads.com di Chrome kamu yang biasa (pastikan sudah login).\n"
-                    "  2. Pasang ekstensi 'Cookie-Editor' di Chrome Web Store.\n"
-                    "  3. Klik ikon Cookie-Editor di tab threads.com -> Export -> Export as JSON.\n"
-                    "  4. Simpan file sebagai cookies.json lalu upload langsung di halaman Settings\n"
-                    "     (atau jalankan: python login_helper.py --import-cookies cookies.json).\n"
-                    "\n  ATAU jalankan `python login_helper.py` (tanpa --use-my-chrome) untuk\n"
-                    "  login 1x saja di Google Chrome profil khusus bot."
-                )
-                return
-            print(f"[Info] Google Chrome tidak terdeteksi ({chrome_exc}), fallback ke Chromium...")
+        except Exception:
             context = await p.chromium.launch_persistent_context(**launch_kwargs)
 
-        await context.add_init_script(
-            "Object.defineProperty(navigator, 'webdriver', { get: () => undefined });"
-        )
-
         page = context.pages[0] if context.pages else await context.new_page()
-        print("\n[...] Membuka https://www.threads.com/ ...")
         await page.goto("https://www.threads.com/", wait_until="domcontentloaded")
-        print("[OK] Jendela Chrome sudah terbuka.")
 
         while True:
-            answer = await asyncio.to_thread(
+            ans = await asyncio.to_thread(
                 input,
-                "\n>>> Sudah masuk ke feed Threads? Ketik 'ok' lalu ENTER (atau 'batal'): ",
+                "\n>>> Sudah login di jendela baru? Ketik 'ok' + ENTER (atau 'batal'): ",
             )
-            cleaned = answer.strip().lower()
-            if cleaned in {"batal", "cancel", "q", "exit"}:
-                print("Dibatalkan.")
+            if ans.strip().lower() in {"batal", "q", "exit"}:
                 await context.close()
                 return
-
-            if cleaned not in {"ok", "ya", "yes", "done", "save"}:
-                print("    [Info] Ketik 'ok' + ENTER kalau sudah melihat feed Threads kamu.")
+            if ans.strip().lower() != "ok":
                 continue
 
             state = await context.storage_state()
-            cookies = state.get("cookies", [])
-            threads_cookies, has_auth = _analyze_cookies(cookies)
-
-            if not has_auth:
-                print(
-                    f"\n[!] Cookie login (sessionid/ds_user_id) BELUM terdeteksi "
-                    f"(baru ada {len(threads_cookies)} cookie tamu)."
-                )
-                force = await asyncio.to_thread(
-                    input,
-                    "    Ketik 'paksa' untuk tetap simpan, atau tekan ENTER untuk lanjut login dulu: ",
-                )
-                if force.strip().lower() != "paksa":
-                    continue
-
-            OUTPUT_PATH.write_text(json.dumps(state, indent=2), encoding="utf-8")
-            print(f"\n[OK] Session berhasil disimpan ke: {OUTPUT_PATH}")
-            print(f"     Total cookies captured     : {len(cookies)}")
-            print(f"     Threads domain cookies     : {len(threads_cookies)}")
-            print(f"     Login session terverifikasi: {'YA' if has_auth else 'BELUM'}")
-            break
+            if _save_from_json_string(json.dumps(state)):
+                break
 
         await context.close()
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(
-        description="Threads Affiliate AI Hunter — Local Chrome Login Helper"
-    )
-    parser.add_argument(
-        "--use-my-chrome",
-        action="store_true",
-        help="Gunakan profil Google Chrome Windows kamu yang sudah ada (tutup Chrome dulu).",
-    )
-    parser.add_argument(
-        "--profile",
-        type=str,
-        default=None,
-        help="Nama folder profil Chrome (misal 'Default', 'Profile 1') untuk --use-my-chrome.",
-    )
+    parser = argparse.ArgumentParser(description="ThreadsHunter Session Helper")
     parser.add_argument(
         "--import-cookies",
         type=str,
         default=None,
-        help="Import file JSON hasil Export dari ekstensi Chrome Cookie-Editor di threads.com.",
+        help="Path ke file JSON hasil Export Cookie-Editor.",
     )
     args = parser.parse_args()
 
     if args.import_cookies:
-        _import_cookie_file(Path(args.import_cookies))
+        p = Path(args.import_cookies)
+        if not p.exists():
+            print(f"[ERROR] File tidak ditemukan: {p}")
+            sys.exit(1)
+        _save_from_json_string(p.read_text(encoding="utf-8"))
         return
 
-    asyncio.run(_run_interactive_login(args.use_my_chrome, args.profile))
+    print("=" * 72)
+    print(" ThreadsHunter — Hubungkan Akun Threads")
+    print("=" * 72)
+    print(" [1] Pakai sesi dari Chrome LAMA kamu yang sudah ada (TANPA buka browser baru!)")
+    print(" [2] Buka browser baru terpisah untuk login manual")
+    choice = input("\nPilih [1/2] (tekan ENTER untuk pilih 1): ").strip()
+
+    if choice == "2":
+        asyncio.run(_run_separate_browser_login())
+    else:
+        _run_clipboard_flow()
 
 
 if __name__ == "__main__":

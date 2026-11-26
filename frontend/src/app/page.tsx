@@ -4,18 +4,12 @@ import * as React from "react";
 import Link from "next/link";
 import useSWR from "swr";
 import {
-  Activity,
   AlertCircle,
   ArrowUpRight,
-  CheckCircle2,
-  Clock,
-  Cpu,
+  Check,
   Play,
   Radar,
-  ShieldCheck,
-  Sparkles,
   Square,
-  Terminal,
 } from "lucide-react";
 import {
   api,
@@ -33,7 +27,6 @@ import {
 import { PillButton } from "@/components/PillButton";
 import { StatCounter } from "@/components/StatCounter";
 import { Switch } from "@/components/ui/switch";
-import { Badge } from "@/components/ui/badge";
 
 export default function OverviewPage() {
   const {
@@ -41,18 +34,17 @@ export default function OverviewPage() {
     error: statusError,
     mutate: mutateStatus,
   } = useSWR<BotStatus>("/api/bot/status", swrFetcher, {
-    refreshInterval: 5000,
+    refreshInterval: 4000,
   });
 
-  const {
-    data: stats,
-    mutate: mutateStats,
-  } = useSWR<DashboardStats>("/api/bot/stats", swrFetcher, {
-    refreshInterval: 8000,
-  });
+  const { data: stats, mutate: mutateStats } = useSWR<DashboardStats>(
+    "/api/bot/stats",
+    swrFetcher,
+    { refreshInterval: 8000 }
+  );
 
   const { data: topLeads } = useSWR<LeadListResponse>(
-    "/api/leads?status=PENDING_REVIEW&page=1&page_size=3",
+    "/api/leads?status=PENDING_REVIEW&page=1&page_size=4",
     swrFetcher,
     { refreshInterval: 10000 }
   );
@@ -64,14 +56,14 @@ export default function OverviewPage() {
     type: "success" | "error";
     text: string;
   } | null>(null);
-  const [countdownText, setCountdownText] = React.useState<string>("Standby");
+  const [countdownText, setCountdownText] = React.useState<string>("--:--");
 
   React.useEffect(() => {
     const updateTick = () => {
       if (botStatus?.is_scheduler_running && botStatus.next_run_at) {
         setCountdownText(formatCountdown(botStatus.next_run_at));
       } else {
-        setCountdownText("Standby");
+        setCountdownText("MANUAL");
       }
     };
     updateTick();
@@ -103,20 +95,19 @@ export default function OverviewPage() {
       const running = Boolean(botStatus?.is_scheduler_running);
       if (running) {
         await api.stopScheduler();
-        setBanner({ type: "success", text: "Auto-Scheduler dihentikan." });
+        setBanner({ type: "success", text: "Periodic scheduler stopped." });
       } else {
         await api.startScheduler();
         setBanner({
           type: "success",
-          text: `Auto-Scheduler aktif setiap ${botStatus?.scan_interval_minutes ?? 25} menit.`,
+          text: `Scheduler armed — scanning every ${botStatus?.scan_interval_minutes ?? 25}m.`,
         });
       }
       await mutateStatus();
     } catch (err) {
       setBanner({
         type: "error",
-        text:
-          err instanceof Error ? err.message : "Gagal mengubah status scheduler.",
+        text: err instanceof Error ? err.message : "Failed to update scheduler.",
       });
     } finally {
       setSchedulerReq(false);
@@ -132,12 +123,12 @@ export default function OverviewPage() {
       await mutateStatus();
       setBanner({
         type: "success",
-        text: `Bot mode beralih ke ${nextMode.replace("_", " ")}.`,
+        text: `Responder switched to ${nextMode.replace("_", "-")}.`,
       });
     } catch (err) {
       setBanner({
         type: "error",
-        text: err instanceof Error ? err.message : "Gagal mengganti bot mode.",
+        text: err instanceof Error ? err.message : "Failed to switch mode.",
       });
     } finally {
       setModeUpdating(false);
@@ -147,32 +138,66 @@ export default function OverviewPage() {
   const postsScraped = stats?.posts_scraped ?? 0;
   const leadsFound = stats?.leads_found ?? 0;
   const commentsSent = stats?.comments_sent ?? 0;
-  const maxComments = stats?.max_comments_per_day ?? botStatus?.max_comments_per_day ?? 12;
-  const quotaPct = Math.min(100, Math.round((commentsSent / Math.max(1, maxComments)) * 100));
+  const maxComments =
+    stats?.max_comments_per_day ?? botStatus?.max_comments_per_day ?? 12;
+  const activeProducts = stats?.active_products ?? 0;
+  const pendingCount = stats?.pending_review_count ?? 0;
   const isFullAuto = botStatus?.bot_mode === "FULL_AUTO";
+  const isAuthOk = Boolean(botStatus?.auth_status?.connected);
+  const isAiOk = Boolean(botStatus?.has_ai_api_key);
+
+  // Segmented 12-slot visual meter for anti-ban quota
+  const segmentTotal = Math.min(20, Math.max(6, maxComments));
+  const filledSegments = Math.round(
+    (Math.min(commentsSent, maxComments) / Math.max(1, maxComments)) *
+      segmentTotal
+  );
+
+  const readinessSteps = [
+    {
+      done: isAuthOk,
+      label: "Threads Session Cookie",
+      detail: isAuthOk
+        ? `${botStatus?.auth_status.threads_cookie_count ?? 0} cookies verified`
+        : "Connect Chrome cookies",
+      href: "/settings#auth-session",
+    },
+    {
+      done: activeProducts > 0,
+      label: "Shopee Affiliate Catalog",
+      detail:
+        activeProducts > 0
+          ? `${activeProducts} active links locked`
+          : "Import Shopee CSV / links",
+      href: "/products",
+    },
+    {
+      done: isAiOk,
+      label: "LLM Intent Router",
+      detail: isAiOk
+        ? botStatus?.ai_model || "Configured"
+        : "Set API key in Settings",
+      href: "/settings",
+    },
+  ];
 
   return (
     <div className="space-y-12">
-      {/* Backend Connection Warning */}
+      {/* Backend Offline Alert */}
       {statusError && (
         <div
           role="alert"
-          className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 rounded-2xl bg-red-500/10 border border-red-500/30 p-4 text-sm text-red-200"
+          className="flex items-center justify-between gap-4 rounded-xl border border-red-500/30 bg-red-950/30 px-4 py-3 text-xs text-red-200"
         >
-          <div className="flex items-start gap-3">
-            <AlertCircle className="h-5 w-5 text-red-400 shrink-0 mt-0.5" />
-            <div>
-              <p className="font-semibold text-white">
-                Tidak dapat terhubung ke FastAPI Backend
-              </p>
-              <p className="text-xs text-red-200/80 mt-0.5">
-                Pastikan container backend berjalan di{" "}
-                <code className="font-mono text-white">
-                  {process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"}
-                </code>
-                .
-              </p>
-            </div>
+          <div className="flex items-center gap-2.5">
+            <AlertCircle className="h-4 w-4 text-red-400 shrink-0" />
+            <span>
+              Backend API unreachable at{" "}
+              <code className="font-mono text-white">
+                {process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"}
+              </code>
+              . Verify Docker container <code className="font-mono">threads_affiliate_backend</code> is running.
+            </span>
           </div>
           <button
             type="button"
@@ -180,58 +205,68 @@ export default function OverviewPage() {
               mutateStatus();
               mutateStats();
             }}
-            className="self-start sm:self-center rounded-full border border-red-400/40 px-4 py-1.5 text-xs font-medium text-white hover:bg-red-500/20"
+            className="rounded-md border border-red-400/30 px-3 py-1 font-mono text-[11px] text-white hover:bg-red-500/20"
           >
-            Retry
+            RETRY
           </button>
         </div>
       )}
 
-      {/* Hero Section: 2-Column Asymmetric Editorial Split */}
-      <section className="grid grid-cols-1 lg:grid-cols-12 gap-10 lg:gap-12 items-start">
-        {/* Left Column */}
-        <div className="lg:col-span-7 space-y-7">
-          <div className="inline-flex items-center gap-2 rounded-full bg-[#151518] border border-[#26262A] px-3.5 py-1.5 text-xs font-medium text-[#9E9EA6]">
-            <span
-              className={cn(
-                "h-2 w-2 rounded-full",
-                botStatus?.is_scanning
-                  ? "bg-[#FF6B00] animate-ping"
-                  : botStatus?.is_scheduler_running
-                  ? "bg-emerald-400"
-                  : "bg-[#63636B]"
-              )}
-            />
-            <span>
-              {botStatus?.is_scanning
-                ? `Scanning keyword "${botStatus.current_keyword || "..."}"`
-                : botStatus?.is_scheduler_running
-                ? `Auto-Scheduler Active · Next run ${countdownText}`
-                : "Command Center Ready · Manual / Scheduled Mode"}
-            </span>
+      {/* =================================================================== */}
+      {/* SECTION 1: EDITORIAL MASTHEAD + STACKED ARCHITECTURAL KPI METRICS   */}
+      {/* =================================================================== */}
+      <section className="grid grid-cols-1 lg:grid-cols-12 gap-10 lg:gap-12 items-end pb-10 border-b border-[#1C1C20]">
+        {/* Left Masthead (7 cols) */}
+        <div className="lg:col-span-7 space-y-6">
+          {/* Technical Telemetry Eyebrow */}
+          <div className="flex flex-wrap items-center gap-3 font-mono text-[11px] uppercase tracking-[0.14em] text-[#71717A]">
+            <span className="text-[#FF6B00] font-semibold">CONSOLE // 01</span>
+            <span className="text-[#27272A]">/</span>
+            {botStatus?.is_scanning ? (
+              <span className="inline-flex items-center gap-2 text-white">
+                <span className="h-1.5 w-1.5 rounded-full bg-[#FF6B00] animate-ping" />
+                SCANNING &ldquo;{botStatus.current_keyword || "threads"}&rdquo;
+              </span>
+            ) : (
+              <span>
+                {botStatus?.is_scheduler_running
+                  ? `AUTO-CYCLE EVERY ${botStatus.scan_interval_minutes}M`
+                  : "STANDBY · ON-DEMAND"}
+              </span>
+            )}
           </div>
 
-          <div className="space-y-4">
-            <h1 className="text-4xl md:text-5xl lg:text-[54px] font-bold tracking-tight text-white leading-[1.06]">
-              Autonomous Threads{" "}
-              <span className="text-[#FF6B00]">Affiliate</span> Engine.
+          {/* Crisp Editorial Display Title — No Cheesy Marketing Copy */}
+          <div className="space-y-3">
+            <h1 className="text-4xl sm:text-5xl lg:text-[56px] font-bold tracking-[-0.035em] text-white leading-[1.02]">
+              Threads Intent
+              <br />
+              <span className="text-[#71717A] font-medium">
+                Affiliate Dispatch.
+              </span>
             </h1>
-            <p className="max-w-xl text-base text-[#9E9EA6] leading-relaxed">
-              Pantau postingan Threads ber-intent tinggi secara real-time, skor
-              relevansi dengan katalog Shopee Affiliate lewat router AI pilihanmu,
-              dan kirim balasan kasual natural dengan proteksi anti-ban.
+            <p className="max-w-lg text-sm text-[#8E8E98] leading-relaxed">
+              Menangkap percakapan rekomendasi di Threads, mencocokkan khusus
+              dengan{" "}
+              <Link
+                href="/products"
+                className="text-white underline decoration-[#FF6B00]/60 underline-offset-4 hover:text-[#FF6B00]"
+              >
+                {activeProducts} link Shopee Affiliate milikmu
+              </Link>
+              , dan menyiapkan balasan kasual siap kirim.
             </p>
           </div>
 
-          {/* Signature Dual PillButton Triggers */}
-          <div className="flex flex-wrap items-center gap-4 pt-1">
+          {/* Action Controls */}
+          <div className="flex flex-wrap items-center gap-3 pt-1">
             <PillButton
               variant="primary"
               loading={scanningReq || Boolean(botStatus?.is_scanning)}
-              icon={<Radar className="h-4 w-4" />}
+              icon={<Radar className="h-3.5 w-3.5" />}
               onClick={handleManualScan}
             >
-              {botStatus?.is_scanning ? "Scanning Threads..." : "Scan Threads Now"}
+              {botStatus?.is_scanning ? "Scanning Feed..." : "Scan Threads Now"}
             </PillButton>
 
             <PillButton
@@ -239,343 +274,389 @@ export default function OverviewPage() {
               loading={schedulerReq}
               icon={
                 botStatus?.is_scheduler_running ? (
-                  <Square className="h-3.5 w-3.5 fill-current" />
+                  <Square className="h-3 w-3 fill-current" />
                 ) : (
-                  <Play className="h-3.5 w-3.5 fill-current" />
+                  <Play className="h-3 w-3 fill-current" />
                 )
               }
               onClick={handleToggleScheduler}
             >
               {botStatus?.is_scheduler_running
-                ? "Stop Auto-Scheduler"
-                : "Start Auto-Scheduler"}
+                ? "Stop Scheduler"
+                : `Schedule (${botStatus?.scan_interval_minutes ?? 25}m)`}
             </PillButton>
           </div>
 
-          {/* Action Feedback Banner */}
           {banner && (
             <div
               role="status"
               className={cn(
-                "flex items-center justify-between gap-3 rounded-2xl border px-4 py-3 text-sm",
+                "inline-flex items-center gap-3 rounded-lg border px-3.5 py-2 text-xs",
                 banner.type === "success"
-                  ? "bg-emerald-500/10 border-emerald-500/30 text-emerald-300"
-                  : "bg-[#FF6B00]/10 border-[#FF6B00]/40 text-orange-200"
+                  ? "border-emerald-500/30 bg-emerald-950/30 text-emerald-300"
+                  : "border-[#FF6B00]/40 bg-[#FF6B00]/10 text-orange-200"
               )}
             >
-              <div className="flex items-center gap-2.5">
-                {banner.type === "success" ? (
-                  <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-400" />
-                ) : (
-                  <AlertCircle className="h-4 w-4 shrink-0 text-[#FF6B00]" />
-                )}
-                <span>{banner.text}</span>
-              </div>
+              <span>{banner.text}</span>
               {banner.type === "error" && (
                 <Link
                   href="/settings"
-                  className="shrink-0 text-xs font-semibold text-[#FF6B00] hover:underline"
+                  className="font-mono uppercase tracking-wider text-[#FF6B00] hover:underline"
                 >
-                  Open Settings →
+                  Settings →
                 </Link>
               )}
             </div>
           )}
         </div>
 
-        {/* Right Column: Editorial Stacked Orange KPI Counters */}
-        <div className="lg:col-span-5 rounded-2xl bg-[#151518]/70 border border-[#26262A] p-6 sm:p-7 space-y-5 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]">
+        {/* Right Column: Pure Dominic Editorial Stacked Counters (No Boxy Card!) */}
+        <div className="lg:col-span-5 lg:border-l lg:border-[#1C1C20] lg:pl-10">
           <StatCounter
             value={postsScraped > 0 ? `${postsScraped}+` : "0"}
-            label="Posts Scraped Today"
+            label="Posts Evaluated Today"
             sublabel={stats?.date_str || "TODAY"}
           />
           <StatCounter
             value={leadsFound > 0 ? `${leadsFound}+` : "0"}
-            label="High-Intent Leads Matched"
-            sublabel={`${stats?.pending_review_count ?? 0} pending`}
+            label="Buying-Intent Matches"
+            sublabel={`${pendingCount} IN QUEUE`}
           />
           <StatCounter
-            value={`${commentsSent} / ${maxComments}`}
-            label="Affiliate Replies Sent"
-            sublabel={`${quotaPct}% daily cap`}
+            value={`${commentsSent}/${maxComments}`}
+            label="Replies Sent Today"
+            sublabel={isFullAuto ? "FULL-AUTO" : "SEMI-AUTO"}
+            accent={commentsSent > 0}
             hideBorder
           />
         </div>
       </section>
 
-      {/* Middle Section: 01, 02, 03 Live Pipeline Bento Cards */}
-      <section aria-labelledby="pipeline-heading" className="space-y-4">
-        <div className="flex items-center justify-between">
-          <h2
-            id="pipeline-heading"
-            className="text-xs font-semibold uppercase tracking-[0.18em] text-[#63636B]"
-          >
-            Live Automation Pipeline
-          </h2>
-          <Link
-            href="/settings"
-            className="inline-flex items-center gap-1 text-xs font-medium text-[#9E9EA6] hover:text-[#FF6B00] transition-colors"
-          >
-            Configure Pipeline
-            <ArrowUpRight className="h-3.5 w-3.5" />
-          </Link>
-        </div>
+      {/* =================================================================== */}
+      {/* SECTION 2: 01–03 EDITORIAL BENTO PIPELINE (WITH ORANGE ANCHOR CARD) */}
+      {/* =================================================================== */}
+      <section aria-label="Pipeline Modules" className="grid grid-cols-1 md:grid-cols-3 gap-5">
+        {/* 01 // KEYWORD RADAR (Matte Architectural Dark) */}
+        <div className="rounded-2xl bg-[#111113] border border-[#1F1F23] p-6 flex flex-col justify-between min-h-[240px] hover:border-[#2E2E34] transition-colors">
+          <div className="flex items-center justify-between">
+            <span className="font-mono text-xs font-semibold tracking-widest text-[#FF6B00]">
+              01 // RADAR
+            </span>
+            <span className="font-mono text-[11px] text-[#71717A] bg-[#09090B] border border-[#1F1F23] rounded px-2 py-0.5">
+              NEXT · {countdownText}
+            </span>
+          </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-          {/* 01 Keyword Radar */}
-          <div className="bg-[#151518] border border-[#26262A] hover:border-[#FF6B00]/50 rounded-2xl p-6 flex flex-col justify-between min-h-[225px] transition-colors shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]">
-            <div className="flex items-start justify-between gap-3">
-              <span className="text-2xl font-bold text-[#FF6B00] font-mono">
-                01
-              </span>
-              <div className="inline-flex items-center gap-1.5 rounded-full bg-[#0B0B0C] border border-[#26262A] px-2.5 py-1 text-xs font-mono text-[#9E9EA6]">
-                <Clock className="h-3.5 w-3.5 text-[#FF6B00]" />
-                <span>{countdownText}</span>
-              </div>
-            </div>
-
-            <div className="my-4 flex flex-wrap gap-1.5">
-              {(botStatus?.active_keywords?.length
-                ? botStatus.active_keywords
-                : ["rekomendasi tws", "spill parfum awet"]
-              )
-                .slice(0, 5)
-                .map((kw) => (
+          <div className="my-5 flex flex-wrap gap-1.5">
+            {(botStatus?.active_keywords?.length
+              ? botStatus.active_keywords
+              : ["rekomendasi tws", "spill parfum awet"]
+            )
+              .slice(0, 5)
+              .map((kw) => {
+                const active = botStatus?.current_keyword === kw;
+                return (
                   <span
                     key={kw}
                     className={cn(
-                      "rounded-full px-2.5 py-1 text-xs border",
-                      botStatus?.current_keyword === kw
-                        ? "bg-[#FF6B00]/20 border-[#FF6B00] text-white"
-                        : "bg-[#0B0B0C] border-[#26262A] text-[#9E9EA6]"
+                      "rounded-md px-2.5 py-1 font-mono text-[11px] border transition-colors",
+                      active
+                        ? "bg-[#FF6B00] border-[#FF6B00] text-[#09090B] font-semibold"
+                        : "bg-[#09090B] border-[#1F1F23] text-[#A1A1AA]"
                     )}
                   >
                     {kw}
                   </span>
-                ))}
-            </div>
+                );
+              })}
+          </div>
 
+          <div className="flex items-end justify-between gap-3 pt-3 border-t border-[#1C1C20]">
             <div>
-              <h3 className="text-lg font-semibold text-white mb-1.5">
-                Keyword Radar
-              </h3>
-              <p className="text-sm text-[#9E9EA6]">
-                Memindai{" "}
-                <span className="text-white font-medium">
-                  {botStatus?.active_keywords?.length ?? 0} keyword
-                </span>{" "}
-                aktif tiap {botStatus?.scan_interval_minutes ?? 25} menit di
-                feed Threads terbaru.
+              <h2 className="text-[15px] font-semibold text-white">
+                Keyword Rotation
+              </h2>
+              <p className="text-xs text-[#71717A] mt-0.5">
+                {botStatus?.active_keywords?.length ?? 0} queries · filter=recent
               </p>
+            </div>
+            <Link
+              href="/settings"
+              aria-label="Edit search keywords"
+              className="text-[#71717A] hover:text-white transition-colors"
+            >
+              <ArrowUpRight className="h-4 w-4" />
+            </Link>
+          </div>
+        </div>
+
+        {/* 02 // AI INTENT ROUTER — DOMINIC SIGNATURE ELECTRIC ORANGE CARD */}
+        <div className="rounded-2xl bg-gradient-to-b from-[#FF6B00] to-[#E04F00] text-white p-6 flex flex-col justify-between min-h-[240px] border border-[#FF8533]/40">
+          <div className="flex items-center justify-between">
+            <span className="font-mono text-xs font-bold tracking-widest text-[#09090B]">
+              02 // AI ENGINE
+            </span>
+            <span className="rounded bg-[#09090B]/20 px-2 py-0.5 font-mono text-[11px] font-medium text-white">
+              GATE ≥ {botStatus?.min_intent_score ?? 75}%
+            </span>
+          </div>
+
+          <div className="my-5 space-y-2">
+            <div className="font-mono text-lg font-bold tracking-tight text-white truncate">
+              {botStatus?.ai_model || "gemini-2.5-flash"}
+            </div>
+            <div className="font-mono text-[11px] text-white/80 truncate">
+              {formatProviderHost(
+                botStatus?.ai_base_url || "",
+                botStatus?.ai_provider || "openai_compatible"
+              )}
+            </div>
+            <div className="pt-1 flex items-center gap-4 text-xs text-white/90">
+              <span>
+                Catalog: <strong>{activeProducts} links</strong>
+              </span>
+              <span>·</span>
+              <span>
+                Avg:{" "}
+                <strong>
+                  {stats?.avg_intent_score ? `${stats.avg_intent_score}%` : "—"}
+                </strong>
+              </span>
             </div>
           </div>
 
-          {/* 02 AI Intent Filter */}
-          <div className="bg-[#151518] border border-[#26262A] hover:border-[#FF6B00]/50 rounded-2xl p-6 flex flex-col justify-between min-h-[225px] transition-colors shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]">
-            <div className="flex items-start justify-between gap-3">
-              <span className="text-2xl font-bold text-[#FF6B00] font-mono">
-                02
+          <div className="flex items-center justify-between gap-3 pt-3 border-t border-black/15">
+            <span className="text-xs font-medium text-white/90">
+              {isAiOk ? "API Key Configured" : "API Key Missing"}
+            </span>
+            <PillButton size="sm" variant="inverted" href="/settings">
+              Router Config
+            </PillButton>
+          </div>
+        </div>
+
+        {/* 03 // STEALTH RESPONDER (Matte Architectural Dark + Segmented Meter) */}
+        <div className="rounded-2xl bg-[#111113] border border-[#1F1F23] p-6 flex flex-col justify-between min-h-[240px] hover:border-[#2E2E34] transition-colors">
+          <div className="flex items-center justify-between">
+            <span className="font-mono text-xs font-semibold tracking-widest text-[#FF6B00]">
+              03 // STEALTH
+            </span>
+            <div className="flex items-center gap-2">
+              <span className="font-mono text-[11px] text-[#A1A1AA]">
+                {isFullAuto ? "FULL-AUTO" : "SEMI-AUTO"}
               </span>
-              <Badge variant={botStatus?.has_ai_api_key ? "orange" : "outline"}>
-                <Cpu className="h-3 w-3" />
-                {stats?.avg_intent_score
-                  ? `${stats.avg_intent_score}% avg`
-                  : `≥ ${botStatus?.min_intent_score ?? 75}% gate`}
-              </Badge>
-            </div>
-
-            <div className="my-4 rounded-xl bg-[#0B0B0C] border border-[#26262A] p-3 space-y-1">
-              <p className="font-mono text-xs text-white truncate">
-                {botStatus?.ai_model || "gemini-2.5-flash"}
-              </p>
-              <p className="font-mono text-[11px] text-[#63636B] truncate">
-                {formatProviderHost(
-                  botStatus?.ai_base_url || "",
-                  botStatus?.ai_provider || "openai_compatible"
-                )}
-              </p>
-            </div>
-
-            <div>
-              <h3 className="text-lg font-semibold text-white mb-1.5">
-                AI Intent Filter
-              </h3>
-              <p className="text-sm text-[#9E9EA6]">
-                Menyaring niat beli terhadap{" "}
-                <span className="text-white font-medium">
-                  {stats?.active_products ?? 0} produk aktif
-                </span>{" "}
-                dan meracik balasan kasual Indonesia.
-              </p>
+              <Switch
+                checked={isFullAuto}
+                disabled={modeUpdating}
+                aria-label="Toggle FULL_AUTO mode"
+                onCheckedChange={handleToggleBotMode}
+              />
             </div>
           </div>
 
-          {/* 03 Stealth Responder */}
-          <div className="bg-[#151518] border border-[#26262A] hover:border-[#FF6B00]/50 rounded-2xl p-6 flex flex-col justify-between min-h-[225px] transition-colors shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]">
-            <div className="flex items-start justify-between gap-3">
-              <span className="text-2xl font-bold text-[#FF6B00] font-mono">
-                03
+          {/* Discrete 12-Tick Hardware Quota Bar */}
+          <div className="my-5 space-y-2.5">
+            <div className="flex items-center justify-between font-mono text-[11px]">
+              <span className="text-[#71717A]">DAILY CAP</span>
+              <span className="text-white">
+                {commentsSent} / {maxComments} SENT
               </span>
-              <div className="flex items-center gap-2">
-                <span className="font-mono text-[11px] uppercase text-[#9E9EA6]">
-                  {isFullAuto ? "FULL AUTO" : "SEMI AUTO"}
-                </span>
-                <Switch
-                  checked={isFullAuto}
-                  disabled={modeUpdating}
-                  aria-label="Toggle FULL_AUTO mode"
-                  onCheckedChange={handleToggleBotMode}
-                />
-              </div>
             </div>
-
-            <div className="my-4 space-y-2">
-              <div className="flex items-center justify-between text-xs">
-                <span className="inline-flex items-center gap-1.5 text-emerald-400 font-medium">
-                  <ShieldCheck className="h-3.5 w-3.5" />
-                  Anti-Ban Guard Active
-                </span>
-                <span className="font-mono text-[#9E9EA6]">
-                  {commentsSent}/{maxComments}
-                </span>
-              </div>
-              <div className="h-2 w-full rounded-full bg-[#0B0B0C] overflow-hidden border border-[#26262A]">
-                <div
-                  className="h-full rounded-full bg-gradient-to-r from-[#FF6B00] to-[#FF7A1A] transition-all duration-500"
-                  style={{ width: `${quotaPct}%` }}
+            <div
+              className="grid gap-1"
+              style={{
+                gridTemplateColumns: `repeat(${segmentTotal}, minmax(0, 1fr))`,
+              }}
+              aria-hidden="true"
+            >
+              {Array.from({ length: segmentTotal }).map((_, i) => (
+                <span
+                  key={i}
+                  className={cn(
+                    "h-2.5 rounded-[2px]",
+                    i < filledSegments ? "bg-[#FF6B00]" : "bg-[#1E1E24]"
+                  )}
                 />
-              </div>
+              ))}
             </div>
+            <p className="font-mono text-[11px] text-[#52525B]">
+              TYPING 45–110MS · COOLDOWN 45–120S
+            </p>
+          </div>
 
+          <div className="flex items-end justify-between gap-3 pt-3 border-t border-[#1C1C20]">
             <div>
-              <h3 className="text-lg font-semibold text-white mb-1.5">
-                Stealth Responder
-              </h3>
-              <p className="text-sm text-[#9E9EA6]">
-                Mengetik karakter demi karakter (45–110ms) dengan delay acak &amp;
-                batas kuota harian.
+              <h2 className="text-[15px] font-semibold text-white">
+                Human Emulation
+              </h2>
+              <p className="text-xs text-[#71717A] mt-0.5">
+                Locked to owned Shopee links only
               </p>
             </div>
+            <Link
+              href="/leads"
+              aria-label="Open Leads Studio"
+              className="text-[#71717A] hover:text-white transition-colors"
+            >
+              <ArrowUpRight className="h-4 w-4" />
+            </Link>
           </div>
         </div>
       </section>
 
-      {/* Bottom Section: Live Activity Feed + Top Queued Leads */}
-      <section className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-        {/* Live Activity Feed */}
-        <div className="lg:col-span-7 rounded-2xl bg-[#151518] border border-[#26262A] p-6 space-y-4">
-          <div className="flex items-center justify-between border-b border-[#26262A] pb-3">
-            <div className="flex items-center gap-2">
-              <Terminal className="h-4 w-4 text-[#FF6B00]" />
-              <h2 className="text-base font-semibold text-white">
-                Live Automation Feed
+      {/* =================================================================== */}
+      {/* SECTION 3: UNIFIED ARCHITECTURAL CONSOLE (TELEMETRY + QUEUE/SETUP)  */}
+      {/* =================================================================== */}
+      <section className="rounded-2xl border border-[#1F1F23] bg-[#0D0D10] overflow-hidden grid grid-cols-1 lg:grid-cols-12 divide-y lg:divide-y-0 lg:divide-x divide-[#1F1F23]">
+        {/* Left Console Pane: Monospace Engine Telemetry (7 cols) */}
+        <div className="lg:col-span-7 flex flex-col">
+          <div className="flex items-center justify-between px-5 py-3.5 border-b border-[#1F1F23] bg-[#111114]">
+            <div className="flex items-center gap-2.5">
+              <span
+                className={cn(
+                  "h-2 w-2 rounded-full",
+                  botStatus?.is_scanning
+                    ? "bg-[#FF6B00] animate-pulse"
+                    : "bg-emerald-400"
+                )}
+              />
+              <h2 className="font-mono text-xs font-semibold uppercase tracking-wider text-white">
+                Engine Telemetry Stream
               </h2>
             </div>
-            <span className="font-mono text-xs text-[#63636B]">
+            <span className="font-mono text-[11px] text-[#52525B]">
               {botStatus?.last_scan_at
-                ? `Last scan ${formatRelativeTime(botStatus.last_scan_at)}`
-                : "No scans yet"}
+                ? `LAST RUN · ${formatRelativeTime(botStatus.last_scan_at).toUpperCase()}`
+                : "AWAITING FIRST SCAN"}
             </span>
           </div>
 
-          <div className="space-y-2.5 max-h-[300px] overflow-y-auto pr-1">
+          <div className="p-4 font-mono text-xs space-y-1.5 max-h-[320px] overflow-y-auto">
             {botStatus?.recent_logs && botStatus.recent_logs.length > 0 ? (
-              botStatus.recent_logs.map((log, idx) => (
-                <div
-                  key={`${log.timestamp}-${idx}`}
-                  className="flex items-start gap-3 rounded-xl bg-[#0B0B0C]/70 border border-[#26262A]/70 px-3.5 py-2.5 text-xs"
-                >
-                  <span
-                    className={cn(
-                      "mt-1 h-2 w-2 rounded-full shrink-0",
-                      log.level === "success" && "bg-emerald-400",
-                      log.level === "error" && "bg-red-400",
-                      log.level === "warning" && "bg-[#FF6B00]",
-                      log.level === "info" && "bg-[#63636B]"
-                    )}
-                  />
-                  <div className="min-w-0 flex-1">
-                    <p className="text-[#E4E4E7] leading-relaxed break-words">
+              botStatus.recent_logs.map((log, idx) => {
+                const tagMap = {
+                  success: { text: "OKAY", cls: "text-emerald-400" },
+                  error: { text: "FAIL", cls: "text-red-400" },
+                  warning: { text: "WARN", cls: "text-[#FF6B00]" },
+                  info: { text: "INFO", cls: "text-[#71717A]" },
+                }[log.level];
+
+                return (
+                  <div
+                    key={`${log.timestamp}-${idx}`}
+                    className="grid grid-cols-[54px_44px_1fr] items-baseline gap-2.5 rounded px-2 py-1.5 hover:bg-white/[0.02]"
+                  >
+                    <span className="text-[11px] text-[#52525B] tabular-nums">
+                      {formatRelativeTime(log.timestamp)}
+                    </span>
+                    <span className={cn("text-[11px] font-semibold", tagMap.cls)}>
+                      [{tagMap.text}]
+                    </span>
+                    <span className="text-[#D4D4D8] leading-relaxed break-words font-sans text-xs">
                       {log.message}
-                    </p>
+                    </span>
                   </div>
-                  <span className="font-mono text-[11px] text-[#63636B] shrink-0">
-                    {formatRelativeTime(log.timestamp)}
-                  </span>
-                </div>
-              ))
+                );
+              })
             ) : (
-              <div className="py-10 text-center text-sm text-[#63636B]">
-                <Activity className="mx-auto h-6 w-6 mb-2 text-[#26262A]" />
-                Belum ada log aktivitas. Klik &ldquo;Scan Threads Now&rdquo;
-                untuk mulai memantau.
+              <div className="py-14 text-center text-[#52525B]">
+                No runtime events recorded yet.
               </div>
             )}
           </div>
         </div>
 
-        {/* High-Intent Queue Preview */}
-        <div className="lg:col-span-5 rounded-2xl bg-[#151518] border border-[#26262A] p-6 flex flex-col justify-between space-y-4">
-          <div className="space-y-4">
-            <div className="flex items-center justify-between border-b border-[#26262A] pb-3">
-              <div className="flex items-center gap-2">
-                <Sparkles className="h-4 w-4 text-[#FF6B00]" />
-                <h2 className="text-base font-semibold text-white">
-                  Hot Leads Waiting Review
-                </h2>
-              </div>
-              <Badge variant="orange">
-                {stats?.pending_review_count ?? 0} queued
-              </Badge>
+        {/* Right Console Pane: Priority Leads OR Live System Readiness Checklist (5 cols) */}
+        <div className="lg:col-span-5 flex flex-col justify-between">
+          <div>
+            <div className="flex items-center justify-between px-5 py-3.5 border-b border-[#1F1F23] bg-[#111114]">
+              <h2 className="font-mono text-xs font-semibold uppercase tracking-wider text-white">
+                {topLeads?.items?.length
+                  ? "Priority Review Queue"
+                  : "Pre-Flight Checklist"}
+              </h2>
+              <span className="font-mono text-[11px] text-[#FF6B00]">
+                {pendingCount} QUEUED
+              </span>
             </div>
 
             {topLeads?.items && topLeads.items.length > 0 ? (
-              <div className="space-y-3">
+              <div className="divide-y divide-[#1C1C20]">
                 {topLeads.items.map((lead) => (
                   <Link
                     key={lead.id}
                     href="/leads"
-                    className={cn(
-                      "block rounded-xl p-3.5 transition-all border",
-                      lead.intent_score >= 90
-                        ? "bg-gradient-to-r from-[#FF6B00]/20 to-[#E04F00]/10 border-[#FF6B00]/50 hover:border-[#FF6B00]"
-                        : "bg-[#0B0B0C]/70 border-[#26262A] hover:border-[#FF6B00]/50"
-                    )}
+                    className="block px-5 py-3.5 hover:bg-[#141418] transition-colors"
                   >
                     <div className="flex items-center justify-between gap-2 mb-1">
                       <span className="text-xs font-semibold text-white truncate">
                         @{lead.author_username}
                       </span>
-                      <span className="font-mono text-xs font-bold text-[#FF6B00]">
-                        {lead.intent_score}% Match
+                      <span
+                        className={cn(
+                          "font-mono text-[11px] font-bold px-1.5 py-0.5 rounded",
+                          lead.intent_score >= 90
+                            ? "bg-[#FF6B00] text-[#09090B]"
+                            : "text-[#FF6B00] bg-[#FF6B00]/10"
+                        )}
+                      >
+                        {lead.intent_score}%
                       </span>
                     </div>
-                    <p className="text-xs text-[#9E9EA6] line-clamp-2 leading-relaxed">
+                    <p className="text-xs text-[#8E8E98] line-clamp-2 leading-relaxed">
                       {lead.post_text}
                     </p>
                   </Link>
                 ))}
               </div>
             ) : (
-              <div className="py-10 text-center space-y-2">
-                <p className="text-sm font-medium text-white">
-                  Antrian review masih kosong
+              <div className="p-5 space-y-3">
+                <p className="text-xs text-[#71717A] leading-relaxed">
+                  Pastikan 3 komponen ini berstatus hijau agar bot hanya membalas
+                  dengan link Shopee Affiliate milikmu:
                 </p>
-                <p className="text-xs text-[#9E9EA6]">
-                  Upload <code className="font-mono text-white">auth_threads.json</code>{" "}
-                  dan API key AI di Settings, lalu jalankan scan pertama.
-                </p>
+                <div className="space-y-2">
+                  {readinessSteps.map((step) => (
+                    <Link
+                      key={step.label}
+                      href={step.href}
+                      className="flex items-center justify-between gap-3 rounded-xl border border-[#1F1F23] bg-[#111114] px-3.5 py-3 hover:border-[#323238] transition-colors"
+                    >
+                      <div className="flex items-center gap-3 min-w-0">
+                        <span
+                          className={cn(
+                            "flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[11px]",
+                            step.done
+                              ? "bg-emerald-500/15 text-emerald-400 border border-emerald-500/30"
+                              : "bg-[#FF6B00]/15 text-[#FF6B00] border border-[#FF6B00]/40 font-mono"
+                          )}
+                        >
+                          {step.done ? <Check className="h-3 w-3" /> : "!"}
+                        </span>
+                        <div className="min-w-0">
+                          <p className="text-xs font-semibold text-white truncate">
+                            {step.label}
+                          </p>
+                          <p className="font-mono text-[11px] text-[#71717A] truncate">
+                            {step.detail}
+                          </p>
+                        </div>
+                      </div>
+                      <ArrowUpRight className="h-3.5 w-3.5 text-[#52525B] shrink-0" />
+                    </Link>
+                  ))}
+                </div>
               </div>
             )}
           </div>
 
-          <div className="pt-2 flex justify-end">
-            <Link href="/leads">
-              <PillButton size="sm" variant="primary">
-                Open Leads Studio
-              </PillButton>
-            </Link>
+          <div className="px-5 py-3.5 border-t border-[#1F1F23] bg-[#111114] flex items-center justify-between">
+            <span className="font-mono text-[11px] text-[#52525B]">
+              {stats?.commented_total_count ?? 0} REPLIED TOTAL
+            </span>
+            <PillButton size="sm" variant="primary" href="/leads">
+              Open Leads Studio
+            </PillButton>
           </div>
         </div>
       </section>

@@ -6,7 +6,7 @@ from datetime import datetime
 from typing import AsyncGenerator
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.config import settings
@@ -85,7 +85,13 @@ async def init_db() -> None:
         # 2. Ensure today's daily_stats row exists
         await get_or_create_today_stat(session)
 
-        # 3. Seed products from seed_products.json only when table is empty
+        # 3. Purge any legacy placeholder/example affiliate links so only user-owned links exist
+        await session.execute(
+            delete(Product).where(Product.affiliate_link.ilike("%example-%"))
+        )
+        await session.commit()
+
+        # 4. Seed products from seed_products.json only when table is empty
         count_result = await session.execute(select(func.count()).select_from(Product))
         product_count = count_result.scalar_one()
 

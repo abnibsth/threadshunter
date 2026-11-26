@@ -1,4 +1,4 @@
-FROM python:3.11-slim
+FROM python:3.11-slim-bookworm
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -17,11 +17,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY requirements.txt .
 RUN pip install --upgrade pip && pip install -r requirements.txt
 
-# Install Chromium and all OS dependencies for headless Threads automation
+# Install Chromium and all Debian 12 (Bookworm) OS dependencies
 RUN playwright install --with-deps chromium
 
 COPY app ./app
-COPY data ./data
+COPY data/seed_products.json ./data/seed_products.json
 COPY login_helper.py ./login_helper.py
 
 RUN mkdir -p /app/data

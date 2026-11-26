@@ -40,6 +40,18 @@ class ProductResponse(ProductBase):
     model_config = ConfigDict(from_attributes=True)
 
 
+class BulkProductImportRequest(BaseModel):
+    raw_text: str = Field(..., min_length=5)
+    default_category: str = Field(default="Shopee Affiliate", max_length=100)
+
+
+class BulkProductImportResponse(BaseModel):
+    imported_count: int
+    updated_count: int
+    skipped_count: int
+    items: List[ProductResponse]
+
+
 # ---------------------------------------------------------------------------
 # Lead Posts Schemas
 # ---------------------------------------------------------------------------
@@ -236,3 +248,8 @@ class ScanTriggerResponse(BaseModel):
     started: bool
     message: str
     keywords: List[str]
+
+
+class RawCookieImportRequest(BaseModel):
+    raw_json: str = Field(..., min_length=2)
+

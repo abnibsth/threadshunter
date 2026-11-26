@@ -1,0 +1,9 @@
+__pycache__
+*.py[cod]
+*$py.class
+.venv
+venv
+data/chrome_profile
+data/auth_threads.json
+.pytest_cache
+.env*

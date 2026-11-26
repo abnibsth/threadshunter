@@ -127,9 +127,10 @@ export default function SettingsPage() {
   const [testResult, setTestResult] = React.useState<TestAIResponse | null>(null);
   const [testError, setTestError] = React.useState<string | null>(null);
 
-  // Auth JSON Uploader state
+  // Auth JSON Uploader & Clipboard Paste state
   const [dragActive, setDragActive] = React.useState(false);
   const [uploadingAuth, setUploadingAuth] = React.useState(false);
+  const [pastedCookies, setPastedCookies] = React.useState("");
   const [uploadNotice, setUploadNotice] = React.useState<{
     type: "success" | "error";
     text: string;
@@ -258,6 +259,50 @@ export default function SettingsPage() {
     } finally {
       setUploadingAuth(false);
       if (fileInputRef.current) fileInputRef.current.value = "";
+    }
+  };
+
+  const handleConnectPastedCookies = async (explicitText?: string) => {
+    setUploadNotice(null);
+    let candidate = (explicitText ?? pastedCookies).trim();
+
+    if (!candidate && typeof navigator !== "undefined" && navigator.clipboard) {
+      try {
+        candidate = (await navigator.clipboard.readText()).trim();
+        if (candidate) setPastedCookies(candidate);
+      } catch {
+        // Clipboard permission denied — ask user to Ctrl+V into textarea
+      }
+    }
+
+    if (!candidate) {
+      setUploadNotice({
+        type: "error",
+        text: "Tempelkan (Ctrl+V) teks JSON dari Cookie-Editor ke kotak di bawah terlebih dahulu.",
+      });
+      return;
+    }
+
+    setUploadingAuth(true);
+    try {
+      const statusRes = await api.importCookiesJson(candidate);
+      await mutateAuth(statusRes, false);
+      await globalMutate("/api/bot/status");
+      setPastedCookies("");
+      setUploadNotice({
+        type: "success",
+        text: `Sesi Chrome berhasil tersambung tanpa buka browser baru! ${statusRes.message}`,
+      });
+    } catch (err) {
+      setUploadNotice({
+        type: "error",
+        text:
+          err instanceof Error
+            ? err.message
+            : "Gagal menghubungkan cookie JSON.",
+      });
+    } finally {
+      setUploadingAuth(false);
     }
   };
 
@@ -857,7 +902,39 @@ export default function SettingsPage() {
           </Badge>
         </div>
 
-        {/* Dropzone */}
+        {/* Instant Paste from Existing Chrome (No New Browser Needed) */}
+        <div className="rounded-2xl bg-[#0B0B0C] border border-[#FF6B00]/35 p-5 space-y-4">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div>
+              <p className="text-sm font-semibold text-white">
+                Pakai Sesi dari Chrome Kamu Sekarang (Tanpa Buka Browser Baru)
+              </p>
+              <p className="text-xs text-[#9E9EA6] mt-0.5">
+                1. Buka <code className="font-mono text-white">threads.com</code> di Chrome lama kamu &rarr;{" "}
+                2. Klik ekstensi <code className="font-mono text-[#FF6B00]">Cookie-Editor</code> &rarr;{" "}
+                <strong className="text-white">Export &rarr; JSON</strong> &rarr;{" "}
+                3. Klik tombol di kanan (atau Ctrl+V di bawah).
+              </p>
+            </div>
+            <PillButton
+              size="sm"
+              loading={uploadingAuth}
+              onClick={() => handleConnectPastedCookies()}
+            >
+              Paste &amp; Connect Chrome
+            </PillButton>
+          </div>
+
+          <Textarea
+            rows={3}
+            value={pastedCookies}
+            onChange={(e) => setPastedCookies(e.target.value)}
+            className="font-mono text-xs"
+            placeholder='Atau tekan Ctrl+V di sini untuk menempel JSON dari Cookie-Editor ([{ "domain": ".threads.com", ... }]) lalu klik Paste & Connect Chrome...'
+          />
+        </div>
+
+        {/* Dropzone (Alternative File Upload) */}
         <div
           onDragOver={(e) => {
             e.preventDefault();

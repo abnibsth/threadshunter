@@ -257,8 +257,26 @@ async def evaluate_post(
     if not model:
         raise AIServiceError("AI Model name tidak boleh kosong.")
 
+    # Filter strictly to user-owned Shopee Affiliate products (never allow example/non-Shopee links)
+    valid_products = [
+        p
+        for p in products
+        if p.affiliate_link
+        and "example-" not in p.affiliate_link.lower()
+        and any(
+            domain in p.affiliate_link.lower()
+            for domain in ("s.shopee.co.id", "shp.ee", "shopee.co.id")
+        )
+    ]
+
+    if not valid_products:
+        raise AIServiceError(
+            "Belum ada produk dengan link Shopee Affiliate asli milikmu di menu Products. "
+            "Tambahkan atau Import Massal produk dari akun Shopee Affiliate kamu terlebih dahulu."
+        )
+
     system_prompt = _build_system_prompt(custom_prompt)
-    user_prompt = _build_user_prompt(post_text, products, keyword=keyword)
+    user_prompt = _build_user_prompt(post_text, valid_products, keyword=keyword)
 
     started_at = time.perf_counter()
     if provider == "google_genai":
@@ -280,8 +298,8 @@ async def evaluate_post(
     latency_ms = int((time.perf_counter() - started_at) * 1000)
     payload = _extract_json_object(raw_output)
 
-    # Validate & sanitize parsed values
-    product_map = {p.id: p for p in products}
+    # Validate & sanitize parsed values strictly against user's verified Shopee catalog
+    product_map = {p.id: p for p in valid_products}
     raw_product_id = payload.get("matched_product_id")
     matched_product_id: Optional[int] = None
     matched_product_name: Optional[str] = None
@@ -305,11 +323,19 @@ async def evaluate_post(
     reasoning = str(payload.get("reasoning", "")).strip()
     draft_reply = str(payload.get("draft_reply", "")).strip()
 
-    # Ensure matched product affiliate link is present in draft_reply when buying intent is true
-    if is_buying_intent and matched_product_id is not None and draft_reply:
+    # Never qualify a post if it does not match a real product from the user's Shopee Affiliate catalog
+    if matched_product_id is None:
+        is_buying_intent = False
+        draft_reply = ""
+    elif draft_reply:
         product = product_map[matched_product_id]
-        if product.affiliate_link and product.affiliate_link not in draft_reply:
-            draft_reply = f"{draft_reply} {product.affiliate_link}".strip()
+        exact_link = product.affiliate_link.strip()
+
+        # Strip markdown [url](url) or any hallucinated/altered URLs and inject user's EXACT affiliate_link
+        draft_reply = re.sub(r"\[https?://[^\]]+\]\((https?://[^\)]+)\)", r"\1", draft_reply)
+        draft_reply = re.sub(r"https?://\S+", "", draft_reply)
+        draft_reply = re.sub(r"\s{2,}", " ", draft_reply).strip(" :,-")
+        draft_reply = f"{draft_reply} {exact_link}".strip()
 
     return AIEvaluationResult(
         is_buying_intent=is_buying_intent,

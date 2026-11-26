@@ -18,6 +18,7 @@ from app.schemas import (
     BotStatusResponse,
     DailyStatItem,
     DashboardStatsResponse,
+    RawCookieImportRequest,
     ScanTriggerRequest,
     ScanTriggerResponse,
 )
@@ -220,3 +221,30 @@ async def upload_auth_state(
         f"Uploaded new auth_threads.json ({auth_status.threads_cookie_count} Threads cookies verified).",
     )
     return auth_status
+
+
+@router.post("/import-cookies", response_model=AuthStatusResponse)
+async def import_cookies_from_json(
+    payload: RawCookieImportRequest,
+) -> AuthStatusResponse:
+    raw_bytes = payload.raw_json.strip().encode("utf-8")
+    if len(raw_bytes) > 5 * 1024 * 1024:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail="Ukuran data cookie melebihi batas maksimal 5MB.",
+        )
+
+    try:
+        auth_status = validate_and_save_auth_state(raw_bytes)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
+
+    scraper_service.add_log(
+        "success",
+        f"Connected Chrome session via JSON paste ({auth_status.threads_cookie_count} Threads cookies verified).",
+    )
+    return auth_status
+

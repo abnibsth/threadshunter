@@ -345,7 +345,7 @@ class ThreadsScraperService:
     async def _extract_posts_from_search(self, keyword: str) -> List[ScrapedRawPost]:
         encoded_kw = urllib.parse.quote(keyword)
         search_url = (
-            f"https://www.threads.net/search?q={encoded_kw}&serp_type=default&filter=recent"
+            f"https://www.threads.com/search?q={encoded_kw}&serp_type=default&filter=recent"
         )
 
         async with async_playwright() as p:
@@ -578,6 +578,19 @@ class ThreadsScraperService:
             reply_text = (lead.draft_reply or "").strip()
             if not reply_text:
                 raise ValueError("Draft reply kosong. Isi teks balasan sebelum mengirim.")
+
+            # Final Commission Protection Guard: ensure reply contains user's own Shopee Affiliate link
+            owned_links_res = await session.execute(select(Product.affiliate_link))
+            owned_links = [
+                lnk.strip()
+                for lnk in owned_links_res.scalars().all()
+                if lnk and "example-" not in lnk.lower()
+            ]
+            if not owned_links or not any(lnk in reply_text for lnk in owned_links):
+                raise ValueError(
+                    "Proteksi Komisi: Balasan dibatalkan karena tidak mengandung link Shopee Affiliate "
+                    "resmi milikmu yang terdaftar di menu Products."
+                )
 
             bot_setting = await get_or_create_bot_settings(session)
             today_stat = await get_or_create_today_stat(session)

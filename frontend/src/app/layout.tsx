@@ -19,15 +19,11 @@ const jetbrainsMono = JetBrains_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "ThreadsHunter — Autonomous Threads Affiliate AI Engine",
+  title: "ThreadsHunter — Shopee Affiliate Automation Console",
   description:
-    "Obsidian & Electric Orange editorial command center for Threads buying-intent discovery, universal multi-LLM scoring, and Shopee Affiliate reply automation.",
+    "Precision Threads buying-intent scanner, multi-LLM evaluator, and Shopee Affiliate smart reply studio.",
   icons: {
-    icon: [
-      { url: "/logo.jpg", type: "image/jpeg" },
-      { url: "/logo.svg", type: "image/svg+xml" },
-    ],
-    apple: "/logo.jpg",
+    icon: [{ url: "/logo.svg", type: "image/svg+xml" }],
   },
 };
 
@@ -41,20 +37,22 @@ export default function RootLayout({
       lang="id"
       className={`dark ${plusJakarta.variable} ${jetbrainsMono.variable}`}
     >
-      <body className="font-sans bg-[#0B0B0C] text-white antialiased min-h-screen flex flex-col">
+      <body className="font-sans bg-[#09090B] text-[#FAFAFA] antialiased min-h-screen flex flex-col">
         <Navbar />
         <main className="mx-auto w-full max-w-7xl flex-1 px-4 sm:px-6 lg:px-8 pt-10 pb-20">
           {children}
         </main>
-        <footer className="border-t border-[#26262A]/80 py-6">
-          <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 flex flex-col sm:flex-row items-center justify-between gap-2 text-xs text-[#63636B]">
+        <footer className="border-t border-[#1C1C20] bg-[#09090B]">
+          <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 py-5 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs text-[#52525B]">
             <div className="flex items-center gap-2.5">
               <BrandLogo size="sm" />
-              <p>Threads Affiliate AI Hunter · Anti-Ban Stealth Engine v3.0</p>
+              <span className="text-[#71717A] font-medium">ThreadsHunter</span>
+              <span>·</span>
+              <span>Shopee Affiliate Stealth Automation</span>
             </div>
-            <p className="font-mono">
-              Obsidian &amp; Electric Orange Editorial UI
-            </p>
+            <span className="font-mono text-[11px] uppercase tracking-wider">
+              SYS // PLAYWRIGHT · FASTAPI · POSTGRES 16
+            </span>
           </div>
         </footer>
       </body>

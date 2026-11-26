@@ -12,6 +12,7 @@ import {
   Plus,
   Search,
   Trash2,
+  Upload,
 } from "lucide-react";
 import { api, Product, ProductPayload, swrFetcher } from "@/lib/api";
 import { cn, truncateUrl } from "@/lib/utils";
@@ -47,6 +48,16 @@ export default function ProductsPage() {
   const [submitting, setSubmitting] = React.useState(false);
   const [formError, setFormError] = React.useState<string | null>(null);
   const [copiedId, setCopiedId] = React.useState<number | null>(null);
+
+  // Bulk Shopee Affiliate Import state
+  const [bulkOpen, setBulkOpen] = React.useState(false);
+  const [bulkText, setBulkText] = React.useState("");
+  const [bulkSubmitting, setBulkSubmitting] = React.useState(false);
+  const [bulkNotice, setBulkNotice] = React.useState<{
+    type: "success" | "error";
+    text: string;
+  } | null>(null);
+  const csvInputRef = React.useRef<HTMLInputElement>(null);
 
   const categories = React.useMemo(() => {
     const unique = new Set<string>(["All"]);
@@ -168,6 +179,43 @@ export default function ProductsPage() {
     }
   };
 
+  const handleCsvFilePicked = async (file: File | null | undefined) => {
+    if (!file) return;
+    const text = await file.text();
+    setBulkText(text);
+    if (csvInputRef.current) csvInputRef.current.value = "";
+  };
+
+  const handleBulkSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setBulkNotice(null);
+    if (!bulkText.trim()) {
+      setBulkNotice({
+        type: "error",
+        text: "Upload file CSV dari 'Buat Link Massal' Shopee Affiliate atau tempel daftar produk + link terlebih dahulu.",
+      });
+      return;
+    }
+    setBulkSubmitting(true);
+    try {
+      const res = await api.bulkImportProducts(bulkText);
+      await mutate();
+      setBulkText("");
+      setBulkOpen(false);
+      setBulkNotice({
+        type: "success",
+        text: `Berhasil! ${res.imported_count} produk baru ditambahkan & ${res.updated_count} diperbarui dari akun Shopee Affiliate kamu.`,
+      });
+    } catch (err) {
+      setBulkNotice({
+        type: "error",
+        text: err instanceof Error ? err.message : "Gagal import produk Shopee Affiliate.",
+      });
+    } finally {
+      setBulkSubmitting(false);
+    }
+  };
+
   return (
     <div className="space-y-8">
       {/* Header */}
@@ -186,13 +234,39 @@ export default function ProductsPage() {
           </p>
         </div>
 
-        <PillButton
-          icon={<Plus className="h-4 w-4" />}
-          onClick={openCreateModal}
-        >
-          Add Affiliate Product
-        </PillButton>
+        <div className="flex flex-wrap items-center gap-3">
+          <PillButton
+            variant="secondary"
+            icon={<Upload className="h-4 w-4" />}
+            onClick={() => {
+              setBulkNotice(null);
+              setBulkOpen(true);
+            }}
+          >
+            Import Massal Shopee
+          </PillButton>
+          <PillButton
+            icon={<Plus className="h-4 w-4" />}
+            onClick={openCreateModal}
+          >
+            Add Affiliate Product
+          </PillButton>
+        </div>
       </div>
+
+      {bulkNotice && !bulkOpen && (
+        <div
+          role="status"
+          className={cn(
+            "rounded-2xl border px-4 py-3 text-sm",
+            bulkNotice.type === "success"
+              ? "bg-emerald-500/10 border-emerald-500/30 text-emerald-300"
+              : "bg-red-500/10 border-red-500/30 text-red-300"
+          )}
+        >
+          {bulkNotice.text}
+        </div>
+      )}
 
       {/* Search & Category Filter Row */}
       <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 border-b border-[#26262A] pb-5">
@@ -568,6 +642,97 @@ export default function ProductsPage() {
             </Button>
             <PillButton type="submit" loading={submitting}>
               {editingProduct ? "Update Product" : "Save Product"}
+            </PillButton>
+          </div>
+        </form>
+      </Dialog>
+
+      {/* Bulk Import from Shopee Affiliate ("Buat Link Massal" CSV / Paste) */}
+      <Dialog
+        open={bulkOpen}
+        onClose={() => setBulkOpen(false)}
+        title="Import dari Akun Shopee Affiliate Kamu"
+        description="Semua produk yang di-import akan dikunci memakai shortlink resmi akun Shopee Affiliate kamu."
+      >
+        <form onSubmit={handleBulkSubmit} className="space-y-4">
+          <div className="rounded-xl bg-[#0B0B0C] border border-[#26262A] p-4 space-y-2 text-xs text-[#9E9EA6]">
+            <p className="font-semibold text-white">
+              Cara ambil banyak produk sekaligus dari affiliate.shopee.co.id:
+            </p>
+            <ol className="list-decimal list-inside space-y-1">
+              <li>
+                Di halaman <strong className="text-white">Penawaran Produk</strong> Shopee Affiliate kamu, centang{" "}
+                <strong className="text-white">Pilih semua produk di halaman ini</strong>.
+              </li>
+              <li>
+                Klik <strong className="text-[#FF6B00]">Buat Link Massal</strong> &rarr; klik{" "}
+                <strong className="text-white">Unduh File (CSV)</strong> (atau salin daftar produk + link).
+              </li>
+              <li>
+                Pilih file CSV tersebut di bawah atau langsung paste teksnya.
+              </li>
+            </ol>
+          </div>
+
+          <div className="flex items-center justify-between gap-3">
+            <input
+              ref={csvInputRef}
+              type="file"
+              accept=".csv,.txt,text/csv"
+              className="hidden"
+              onChange={(e) => handleCsvFilePicked(e.target.files?.[0])}
+            />
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => csvInputRef.current?.click()}
+            >
+              <Upload className="h-3.5 w-3.5" />
+              Pilih File CSV Shopee Affiliate
+            </Button>
+            {bulkText && (
+              <span className="font-mono text-xs text-emerald-400">
+                Data siap di-import ({bulkText.split("\n").filter(Boolean).length} baris)
+              </span>
+            )}
+          </div>
+
+          <div className="space-y-1.5">
+            <label htmlFor="bulk-text" className="text-xs font-medium text-[#9E9EA6]">
+              Atau Paste Daftar Nama Produk + Link s.shopee.co.id Kamu
+            </label>
+            <Textarea
+              id="bulk-text"
+              rows={6}
+              className="font-mono text-xs"
+              placeholder={`Contoh:\nVelixir Parfums Athena Eau de Parfum | Rp365.000 | https://s.shopee.co.id/xxxxxx\nGoojodoq Kipas Turbo GFS001 | Rp238.280 | https://s.shopee.co.id/yyyyyy`}
+              value={bulkText}
+              onChange={(e) => setBulkText(e.target.value)}
+            />
+          </div>
+
+          {bulkNotice && (
+            <p
+              role="alert"
+              className={cn(
+                "text-xs",
+                bulkNotice.type === "error" ? "text-red-400" : "text-emerald-400"
+              )}
+            >
+              {bulkNotice.text}
+            </p>
+          )}
+
+          <div className="flex items-center justify-end gap-3 pt-2 border-t border-[#26262A]">
+            <Button
+              variant="ghost"
+              onClick={() => setBulkOpen(false)}
+              disabled={bulkSubmitting}
+            >
+              Cancel
+            </Button>
+            <PillButton type="submit" loading={bulkSubmitting}>
+              Import ke Katalog Saya
             </PillButton>
           </div>
         </form>

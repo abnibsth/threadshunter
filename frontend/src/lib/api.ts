@@ -38,6 +38,13 @@ export interface ProductPayload {
   is_active: boolean;
 }
 
+export interface BulkProductImportResponse {
+  imported_count: number;
+  updated_count: number;
+  skipped_count: number;
+  items: Product[];
+}
+
 export type LeadStatus = "PENDING_REVIEW" | "COMMENTED" | "IGNORED" | "FAILED";
 
 export interface MatchedProductSummary {
@@ -269,6 +276,11 @@ export const api = {
       body: formData,
     });
   },
+  importCookiesJson: (rawJson: string) =>
+    request<AuthStatus>("/api/bot/import-cookies", {
+      method: "POST",
+      body: JSON.stringify({ raw_json: rawJson }),
+    }),
 
   // Leads
   listLeads: (params?: {
@@ -324,6 +336,14 @@ export const api = {
     }),
   deleteProduct: (productId: number) =>
     request<void>(`/api/products/${productId}`, { method: "DELETE" }),
+  bulkImportProducts: (rawText: string, defaultCategory = "Shopee Affiliate") =>
+    request<BulkProductImportResponse>("/api/products/bulk-import", {
+      method: "POST",
+      body: JSON.stringify({
+        raw_text: rawText,
+        default_category: defaultCategory,
+      }),
+    }),
 
   // Settings & AI Tester
   getSettings: () => request<BotSetting>("/api/settings"),
