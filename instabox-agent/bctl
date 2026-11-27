@@ -1,0 +1,480 @@
+#!/usr/bin/env python3
+"""
+bctl — Live Visible Cursor & Browser Controller for InstaBox Chromium (DISPLAY=:1)
+
+Automatically focuses Chromium and translates window-relative accessibility coordinates
+into exact global X11 screen coordinates (handles floating/resized Chromium windows on VNC).
+
+Commands:
+  bctl read [filter]        Compact accessibility readout of live Chromium with exact screen (x,y)
+  bctl tabs                 List open Chromium tabs with their clickable screen (x,y)
+  bctl tab <keyword>        Smoothly glide cursor and click tab matching keyword (e.g. threads, shopee)
+  bctl click <x> <y>        Smoothly animate mouse cursor to (x,y) and left-click
+  bctl type "<text>"        Type text with human-like cadence (45-90ms/char)
+  bctl paste "<text>"       Paste exact UTF-8 text via clipboard (instant, non-blocking xclip)
+  bctl key "<combo>"        Press key (Return, Escape, ctrl+l, ctrl+a, BackSpace, Page_Down)
+  bctl scroll <down|up> [n] Smoothly scroll the page (default n=5)
+  bctl goto "<url>"         Click address bar, type URL, press Enter (fast, zero clipboard hang)
+  bctl clip                 Print current clipboard content (e.g. copied s.shopee.co.id link)
+  bctl clear-clip           Clear clipboard so you can confirm a fresh link was copied
+  bctl wait <seconds>       Sleep for N seconds
+"""
+
+from __future__ import annotations
+
+import math
+import os
+import random
+import re
+import subprocess
+import sys
+import time
+from typing import List, Optional, Tuple
+
+ENV = {**os.environ, "DISPLAY": os.environ.get("DISPLAY") or ":1"}
+
+FRAME_RE = re.compile(
+    r"Frame:\s*\{x:\s*(-?\d+),\s*y:\s*(-?\d+),\s*width:\s*(\d+),\s*height:\s*(\d+)\}"
+)
+
+KEEP_ROLES = {
+    "page tab",
+    "button",
+    "link",
+    "entry",
+    "text",
+    "static",
+    "heading",
+    "check box",
+    "menu item",
+    "radio button",
+    "combo box",
+    "textbox",
+    "paragraph",
+    "dialog",
+    "alert",
+}
+
+NOISE_LABELS = {
+    "",
+    "Minimize",
+    "Maximize",
+    "Restore",
+    "Close",
+    "Mute tab",
+    "Back",
+    "Forward",
+    "Reload",
+    "Home",
+    "Apps",
+    "Managed bookmarks",
+    "All Bookmarks",
+    "Debian.org",
+    "Latest News",
+    "Help",
+    "Tab groups",
+    "Tab search",
+    "Collapse tabs",
+    "View site information",
+    "Translate",
+    "AI Mode button, press Enter to ask AI Mode",
+    "Open tab in split view",
+    "Menu containing hidden bookmarks",
+    "Follow",
+    "Like",
+    "Repost",
+    "Share",
+    "More",
+}
+
+
+def run_cmd(args: List[str], timeout: int = 20) -> subprocess.CompletedProcess:
+    return subprocess.run(args, env=ENV, capture_output=True, timeout=timeout, check=False)
+
+
+def get_display_size() -> Tuple[int, int]:
+    try:
+        res = run_cmd(["xdotool", "getdisplaygeometry"], timeout=5)
+        parts = res.stdout.decode("utf-8", errors="ignore").strip().split()
+        if len(parts) == 2:
+            return int(parts[0]), int(parts[1])
+    except Exception:
+        pass
+    return 1920, 1080
+
+
+def get_chromium_geometry() -> Tuple[int, int, int, int]:
+    """Return Chromium's live global X11 (x, y, width, height) offset."""
+    sw, sh = get_display_size()
+    try:
+        search = run_cmd(["xdotool", "search", "--onlyvisible", "--class", "chromium"], timeout=5)
+        wids = [w.strip() for w in search.stdout.decode("utf-8", errors="ignore").splitlines() if w.strip()]
+        best = None
+        for wid in wids:
+            geo = run_cmd(["xdotool", "getwindowgeometry", "--shell", wid], timeout=5)
+            vals = {}
+            for ln in geo.stdout.decode("utf-8", errors="ignore").splitlines():
+                if "=" in ln:
+                    k, v = ln.split("=", 1)
+                    try:
+                        vals[k.strip()] = int(v.strip())
+                    except ValueError:
+                        pass
+            if vals.get("WIDTH", 0) >= 300 and vals.get("HEIGHT", 0) >= 200:
+                area = vals["WIDTH"] * vals["HEIGHT"]
+                if best is None or area > best[0]:
+                    best = (area, vals.get("X", 0), vals.get("Y", 0), vals["WIDTH"], vals["HEIGHT"])
+        if best is not None:
+            return best[1], best[2], best[3], best[4]
+    except Exception:
+        pass
+    return 0, 0, sw, sh
+
+
+def set_clipboard_nonblocking(text: str) -> None:
+    """Write text to X11 clipboard without hanging on xclip's background selection owner."""
+    proc = subprocess.Popen(
+        ["xclip", "-selection", "clipboard", "-in"],
+        env=ENV,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        close_fds=True,
+    )
+    if proc.stdin is not None:
+        proc.stdin.write(text.encode("utf-8"))
+        proc.stdin.close()
+    try:
+        proc.wait(timeout=1.5)
+    except subprocess.TimeoutExpired:
+        pass
+
+
+def get_mouse_pos() -> Tuple[int, int]:
+    res = run_cmd(["xdotool", "getmouselocation", "--shell"], timeout=5)
+    sw, sh = get_display_size()
+    x, y = sw // 2, sh // 2
+    for line in res.stdout.decode("utf-8", errors="ignore").splitlines():
+        if line.startswith("X="):
+            x = int(line.split("=", 1)[1])
+        elif line.startswith("Y="):
+            y = int(line.split("=", 1)[1])
+    return x, y
+
+
+def focus_chromium() -> None:
+    """Bring Chromium window to front and activate it so background windows never eat clicks."""
+    try:
+        search = run_cmd(["xdotool", "search", "--onlyvisible", "--class", "chromium"], timeout=5)
+        wids = [w.strip() for w in search.stdout.decode("utf-8", errors="ignore").splitlines() if w.strip()]
+        for wid in wids:
+            run_cmd(["xdotool", "windowactivate", wid], timeout=5)
+            run_cmd(["xdotool", "windowraise", wid], timeout=5)
+            time.sleep(0.08)
+            break
+    except Exception:
+        pass
+
+
+def smooth_move(target_x: int, target_y: int) -> None:
+    """Glide the cursor visibly across screen with slight ease-in-out curve (no --sync hang)."""
+    start_x, start_y = get_mouse_pos()
+    dist = math.hypot(target_x - start_x, target_y - start_y)
+    steps = max(6, min(22, int(dist / 38)))
+    for i in range(1, steps + 1):
+        t = i / steps
+        ease = t * t * (3.0 - 2.0 * t)
+        nx = int(round(start_x + (target_x - start_x) * ease))
+        ny = int(round(start_y + (target_y - start_y) * ease))
+        run_cmd(["xdotool", "mousemove", str(nx), str(ny)], timeout=5)
+        time.sleep(random.uniform(0.008, 0.016))
+    run_cmd(["xdotool", "mousemove", str(target_x), str(target_y)], timeout=5)
+    time.sleep(0.04)
+
+
+def get_raw_snapshot() -> str:
+    res = run_cmd(["ocu", "snapshot", "Chromium"], timeout=25)
+    return res.stdout.decode("utf-8", errors="ignore")
+
+
+def parse_snapshot_lines(raw: str) -> List[dict]:
+    sw, sh = get_display_size()
+    wx, wy, _ww, _wh = get_chromium_geometry()
+
+    root_x, root_y = 0, 0
+    for line in raw.splitlines()[:6]:
+        if " frame " in line:
+            fm = FRAME_RE.search(line)
+            if fm:
+                root_x, root_y = int(fm.group(1)), int(fm.group(2))
+            break
+
+    offset_x = wx if abs(root_x) <= 5 and abs(wx) > 5 else 0
+    offset_y = wy if abs(root_y) <= 5 and abs(wy) > 5 else 0
+
+    items: List[dict] = []
+    seen_dedupe = set()
+
+    for line in raw.splitlines():
+        frame_m = FRAME_RE.search(line)
+        if not frame_m:
+            continue
+        rx, ry, w, h = (int(frame_m.group(i)) for i in range(1, 5))
+        if w <= 0 or h <= 0:
+            continue
+
+        gx = rx + offset_x
+        gy = ry + offset_y
+        if gx + w < 0 or gy + h < 0 or gy > sh + 20 or gx > sw + 20:
+            continue
+
+        prefix = line[: frame_m.start()].strip()
+        prefix = re.sub(r"Secondary Actions:.*$", "", prefix).strip()
+
+        m = re.match(
+            r"^(\d+)\s+(page tab list|page tab|check box|menu item|radio button|combo box|document web|tool bar|button|link|entry|static|heading|textbox|paragraph|dialog|alert|section|image)\s*(.*)$",
+            prefix,
+        )
+        if not m:
+            continue
+
+        node_id, role, rest = m.group(1), m.group(2).strip(), m.group(3).strip()
+        if role not in KEEP_ROLES:
+            continue
+
+        label = rest.replace("\ufffc", "").strip()
+        label = re.sub(r"\s*Value:\s*", " | ", label).strip(" |")
+        label = re.sub(r"\s+", " ", label).strip()
+
+        if not label or label in NOISE_LABELS:
+            continue
+        if role == "static" and len(label) < 2:
+            continue
+
+        cx = max(2, min(sw - 2, gx + w // 2))
+        cy = max(2, min(sh - 2, gy + h // 2))
+
+        dedupe_key = (role, label[:80], cx // 8, cy // 8)
+        if dedupe_key in seen_dedupe:
+            continue
+        seen_dedupe.add(dedupe_key)
+
+        items.append(
+            {
+                "id": node_id,
+                "role": role,
+                "label": label[:240],
+                "cx": cx,
+                "cy": cy,
+            }
+        )
+
+    return items
+
+
+def cmd_read(keyword_filter: Optional[str] = None) -> None:
+    sw, sh = get_display_size()
+    wx, wy, ww, wh = get_chromium_geometry()
+    raw = get_raw_snapshot()
+    for h in raw.splitlines()[:2]:
+        if h.strip():
+            print(h.strip())
+    print(f"Screen: {sw}x{sh} | Chromium: ({wx},{wy}) {ww}x{wh}")
+    print("---")
+
+    items = parse_snapshot_lines(raw)
+    filt = (keyword_filter or "").strip().lower()
+    if filt:
+        filtered = [
+            it
+            for it in items
+            if filt in it["label"].lower() or filt in it["role"].lower()
+        ]
+    else:
+        filtered = items
+
+    if not filtered:
+        print("(no matching visible elements)")
+        return
+
+    if len(filtered) > 240:
+        head = filtered[:160]
+        tail = filtered[-80:]
+        for it in head:
+            print(f"[{it['role']}] ({it['cx']}, {it['cy']}) {it['label']}")
+        print(f"... ({len(filtered) - 240} middle elements omitted; showing bottom/modal elements below) ...")
+        for it in tail:
+            print(f"[{it['role']}] ({it['cx']}, {it['cy']}) {it['label']}")
+    else:
+        for it in filtered:
+            print(f"[{it['role']}] ({it['cx']}, {it['cy']}) {it['label']}")
+
+
+def cmd_tabs() -> List[dict]:
+    raw = get_raw_snapshot()
+    tabs = [it for it in parse_snapshot_lines(raw) if it["role"] == "page tab"]
+    for t in tabs:
+        print(f"[tab] ({t['cx']}, {t['cy']}) {t['label']}")
+    return tabs
+
+
+def cmd_switch_tab(keyword: str) -> None:
+    focus_chromium()
+    raw = get_raw_snapshot()
+    tabs = [it for it in parse_snapshot_lines(raw) if it["role"] == "page tab"]
+    kw = keyword.lower().strip()
+    for idx, t in enumerate(tabs, start=1):
+        if kw in t["label"].lower():
+            ty = max(18, t["cy"])
+            smooth_move(t["cx"], ty)
+            time.sleep(0.12)
+            run_cmd(["xdotool", "click", "1"], timeout=5)
+            time.sleep(0.5)
+            after = get_raw_snapshot().splitlines()[:2]
+            if not any(kw in ln.lower() for ln in after) and idx <= 8:
+                run_cmd(["xdotool", "key", "--clearmodifiers", f"ctrl+{idx}"], timeout=5)
+                time.sleep(0.4)
+            print(f"Switched to tab #{idx}: {t['label']} at ({t['cx']}, {ty})")
+            return
+    print(f"Tab matching '{keyword}' not found. Open tabs:")
+    for t in tabs:
+        print(f"  - {t['label']}")
+    sys.exit(1)
+
+
+def cmd_click(x: int, y: int) -> None:
+    focus_chromium()
+    smooth_move(x, y)
+    time.sleep(random.uniform(0.10, 0.20))
+    run_cmd(["xdotool", "click", "1"], timeout=5)
+    print(f"Clicked ({x}, {y})")
+
+
+def cmd_type(text: str) -> None:
+    is_ascii = all(32 <= ord(c) <= 126 or c == "\n" for c in text)
+    if is_ascii and len(text) <= 350:
+        for ch in text:
+            if ch == "\n":
+                run_cmd(["xdotool", "key", "Shift+Return"], timeout=5)
+            else:
+                delay = random.randint(45, 90)
+                run_cmd(["xdotool", "type", "--delay", str(delay), "--", ch], timeout=5)
+        print(f"Typed {len(text)} chars naturally")
+    else:
+        cmd_paste(text)
+
+
+def cmd_paste(text: str) -> None:
+    set_clipboard_nonblocking(text)
+    time.sleep(0.15)
+    run_cmd(["xdotool", "key", "--clearmodifiers", "ctrl+v"], timeout=5)
+    print(f"Pasted {len(text)} chars via clipboard")
+
+
+def cmd_key(combo: str) -> None:
+    mapping = {
+        "enter": "Return",
+        "return": "Return",
+        "esc": "Escape",
+        "escape": "Escape",
+        "tab": "Tab",
+        "backspace": "BackSpace",
+        "pagedown": "Page_Down",
+        "pageup": "Page_Up",
+    }
+    parts = [mapping.get(p.strip().lower(), p.strip()) for p in combo.split("+") if p.strip()]
+    norm = "+".join(parts) or "Return"
+    run_cmd(["xdotool", "key", "--clearmodifiers", norm], timeout=5)
+    print(f"Pressed {norm}")
+
+
+def cmd_scroll(direction: str, steps: int = 5) -> None:
+    focus_chromium()
+    wx, wy, ww, wh = get_chromium_geometry()
+    smooth_move(wx + ww // 2, max(180, wy + wh // 2))
+    btn = "5" if direction.lower() != "up" else "4"
+    for _ in range(max(1, min(18, steps))):
+        run_cmd(["xdotool", "click", btn], timeout=5)
+        time.sleep(random.uniform(0.07, 0.14))
+    print(f"Scrolled {direction} {steps} ticks")
+
+
+def cmd_goto(url: str) -> None:
+    focus_chromium()
+    wx, wy, ww, _ = get_chromium_geometry()
+    ax, ay = wx + ww // 2, max(40, wy + 68)
+    try:
+        for it in parse_snapshot_lines(get_raw_snapshot()):
+            if it["role"] == "entry" and "address" in it["label"].lower():
+                ax, ay = it["cx"], it["cy"]
+                break
+    except Exception:
+        pass
+    smooth_move(ax, ay)
+    time.sleep(0.12)
+    run_cmd(["xdotool", "click", "1"], timeout=5)
+    time.sleep(0.15)
+    run_cmd(["xdotool", "key", "--clearmodifiers", "ctrl+a"], timeout=5)
+    time.sleep(0.1)
+    run_cmd(["xdotool", "type", "--delay", "12", "--", url], timeout=15)
+    time.sleep(0.15)
+    run_cmd(["xdotool", "key", "--clearmodifiers", "Return"], timeout=5)
+    time.sleep(2.5)
+    print(f"Navigated to {url}")
+
+
+def cmd_clip() -> None:
+    try:
+        res = run_cmd(["xclip", "-o", "-selection", "clipboard"], timeout=4)
+        val = res.stdout.decode("utf-8", errors="ignore").strip()
+        print(val if val else "(clipboard empty)")
+    except subprocess.TimeoutExpired:
+        print("(clipboard timeout)")
+
+
+def cmd_clear_clip() -> None:
+    set_clipboard_nonblocking("")
+    print("Clipboard cleared")
+
+
+def main() -> None:
+    if len(sys.argv) < 2:
+        print(__doc__)
+        sys.exit(0)
+
+    sub = sys.argv[1].lower()
+    if sub == "read":
+        cmd_read(sys.argv[2] if len(sys.argv) > 2 else None)
+    elif sub == "tabs":
+        cmd_tabs()
+    elif sub == "tab" and len(sys.argv) >= 3:
+        cmd_switch_tab(" ".join(sys.argv[2:]))
+    elif sub == "click" and len(sys.argv) >= 4:
+        cmd_click(int(sys.argv[2]), int(sys.argv[3]))
+    elif sub == "type" and len(sys.argv) >= 3:
+        cmd_type(" ".join(sys.argv[2:]))
+    elif sub == "paste" and len(sys.argv) >= 3:
+        cmd_paste(" ".join(sys.argv[2:]))
+    elif sub == "key" and len(sys.argv) >= 3:
+        cmd_key(sys.argv[2])
+    elif sub == "scroll":
+        direction = sys.argv[2] if len(sys.argv) >= 3 else "down"
+        steps = int(sys.argv[3]) if len(sys.argv) >= 4 else 5
+        cmd_scroll(direction, steps)
+    elif sub == "goto" and len(sys.argv) >= 3:
+        cmd_goto(sys.argv[2])
+    elif sub == "clip":
+        cmd_clip()
+    elif sub == "clear-clip":
+        cmd_clear_clip()
+    elif sub == "wait" and len(sys.argv) >= 3:
+        secs = max(0.5, min(30.0, float(sys.argv[2])))
+        time.sleep(secs)
+        print(f"Waited {secs}s")
+    else:
+        print(__doc__)
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()
